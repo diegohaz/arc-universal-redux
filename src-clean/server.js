@@ -4,63 +4,70 @@ import serialize from 'serialize-javascript'
 import styleSheet from 'styled-components/lib/models/StyleSheet'
 import { renderToString, renderToStaticMarkup } from 'react-dom/server'
 import { Provider } from 'react-redux'
-import { createMemoryHistory, RouterContext, match } from 'react-router'
-import { syncHistoryWithStore } from 'react-router-redux'
+import { matchRoutes } from 'react-router-config'
+import { ConnectedRouter, push } from 'react-router-redux'
+import createHistory from 'history/createMemoryHistory'
 import { Router } from 'express'
 import express from 'services/express'
-import routes from 'routes'
+import AppRoutes, { routes } from 'routes'
 import configureStore from 'store/configure'
 import { env, port, ip, basename } from 'config'
 import Html from 'components/Html'
 
 const router = new Router()
 
-router.use((req, res, next) => {
+router.use((req, res) => {
   if (env === 'development') {
     global.webpackIsomorphicTools.refresh()
   }
 
   const location = req.url.replace(basename, '')
-  const memoryHistory = createMemoryHistory({ basename })
-  const store = configureStore({}, memoryHistory)
-  const history = syncHistoryWithStore(memoryHistory, store)
+  const history = createHistory()
+  const store = configureStore({}, history)
 
-  match({ history, routes, location }, (error, redirectLocation, renderProps) => {
-    if (redirectLocation) {
-      res.redirect(redirectLocation.pathname + redirectLocation.search)
-    }
+  store.dispatch(push(req.url))
 
-    if (error || !renderProps) {
-      return next(error)
-    }
+  const context = {}
 
-    const fetchData = () => new Promise((resolve, reject) => {
-      const method = req.method.toLowerCase()
-      const { params, location, components } = renderProps
-      const promises = []
+  const fetchData = () => new Promise((resolve, reject) => {
+    const branch = matchRoutes(routes, req.path)
+    const method = req.method.toLowerCase()
 
-      components.forEach((component) => {
-        if (component) {
-          while (component && !component[method]) {
-            // eslint-disable-next-line no-param-reassign
-            component = component.WrappedComponent
-          }
-          component &&
-          component[method] &&
-          promises.push(component[method]({ req, res, params, location, store }))
+    const promises = branch.map(({ route, match }) => {
+      let component = route.component
+
+      if (component) {
+        while (component && !component[method]) {
+          // eslint-disable-next-line no-param-reassign
+          component = component.WrappedComponent
         }
-      })
+        return component &&
+          component[method] &&
+          component[method]({ req, res, match, store })
+      }
 
-      Promise.all(promises).then(resolve).catch(reject)
+      return Promise.resolve(null)
     })
 
-    const render = (store) => {
-      const content = renderToString(
-        <Provider store={store}>
-          <RouterContext {...renderProps} />
-        </Provider>
-      )
+    Promise.all(promises).then(resolve).catch(reject)
+  })
 
+  const render = (store) => {
+    const content = renderToString(
+      <Provider store={store}>
+        <ConnectedRouter
+          context={context}
+          history={history}
+          location={location}
+        >
+          <AppRoutes />
+        </ConnectedRouter>
+      </Provider>
+    )
+
+    if (context.url) {
+      res.redirect(context.status, context.url)
+    } else {
       const styles = styleSheet.rules().map(rule => rule.cssText).join('\n')
       const initialState = store.getState()
       const assets = global.webpackIsomorphicTools.assets()
@@ -71,13 +78,13 @@ router.use((req, res, next) => {
 
       res.send(doctype + html)
     }
+  }
 
-    return fetchData().then(() => {
-      render(configureStore(store.getState(), memoryHistory))
-    }).catch((err) => {
-      console.log(err)
-      res.status(500).end()
-    })
+  return fetchData().then(() => {
+    render(configureStore(store.getState(), history))
+  }).catch((err) => {
+    console.log(err)
+    res.status(500).end()
   })
 })
 

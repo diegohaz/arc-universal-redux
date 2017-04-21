@@ -1,13 +1,24 @@
 import React from 'react'
-import { Route, IndexRoute } from 'react-router'
+import { Switch } from 'react-router'
+import { renderRoutes } from 'react-router-config'
 
 import App from 'components/App'
 import { HomePage } from 'components'
 
-const routes = (
-  <Route path="/" component={App}>
-    <IndexRoute component={HomePage} />
-  </Route>
+export const routes = [
+  {
+    path: '/',
+    exact: true,
+    component: HomePage,
+  },
+]
+
+const AppRoutes = () => (
+  <App>
+    <Switch>
+      {renderRoutes(routes)}
+    </Switch>
+  </App>
 )
 
-export default routes
+export default AppRoutes
